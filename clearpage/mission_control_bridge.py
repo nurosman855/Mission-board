@@ -59,10 +59,15 @@ class MissionControlBridge:
         self.validator = validator
 
     def _create(self, title: str, assigned_to: str, description: str, metadata: dict[str, Any]) -> int:
-        response = self.transport("POST", "/api/tasks", {
+        payload = {
             "title": title, "description": description, "assigned_to": assigned_to,
             "priority": "medium", "metadata": metadata,
-        })
+        }
+        run_id, stage = metadata.get("clearpage_run_id"), metadata.get("stage")
+        if isinstance(run_id, str) and isinstance(stage, str):
+            # Server-side uniqueness covers a remote-create / local-crash gap.
+            payload["idempotency_key"] = f"clearpage:{run_id}:{stage}"
+        response = self.transport("POST", "/api/tasks", payload)
         task = response.get("task")
         if not isinstance(task, dict) or type(task.get("id")) is not int or task.get("assigned_to") != assigned_to:
             raise HandoffError("Mission Control did not confirm task creation and assignment")
