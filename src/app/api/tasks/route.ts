@@ -11,6 +11,7 @@ import { reconcileDeferredTaskCompletions } from '@/lib/task-dispatch';
 import { pushTaskToGitHub, syncTaskOutbound } from '@/lib/github-sync-engine';
 import { pushTaskToGnap } from '@/lib/gnap-sync';
 import { config } from '@/lib/config';
+import { createHash } from 'crypto';
 import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope';
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
@@ -187,6 +188,20 @@ export async function POST(request: NextRequest) {
     if ('error' in validated) return validated.error;
     const body = validated.data;
 
+    const actorKey = auth.user.agent_name || `user:${auth.user.id}`
+    const idempotencyKey = body.idempotency_key
+    const canonicalize = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(canonicalize)
+      if (value !== null && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, entry]) => [key, canonicalize(entry)]))
+      }
+      return value
+    }
+    const payloadHash = idempotencyKey
+      ? createHash('sha256').update(JSON.stringify(canonicalize(body))).digest('hex')
+      : null
+
     const user = auth.user
     const actor = user.display_name || user.username || 'system'
     const {
@@ -217,9 +232,6 @@ export async function POST(request: NextRequest) {
 
     const normalizedStatus = normalizeTaskCreateStatus(status, finalAssignedTo)
 
-    // Resolve project_id for the task
-    const resolvedProjectId = resolveProjectId(db, workspaceId, project_id)
-    
     const now = Math.floor(Date.now() / 1000);
     const mentionResolution = resolveMentionRecipients(description || '', db, workspaceId);
     if (mentionResolution.unresolved.length > 0) {
@@ -232,6 +244,18 @@ export async function POST(request: NextRequest) {
     const resolvedCompletedAt = completed_at ?? (normalizedStatus === 'done' ? now : null)
 
     const createTaskTx = db.transaction(() => {
+      if (idempotencyKey) {
+        const existing = db.prepare(`
+          SELECT task_id, payload_hash FROM task_create_idempotency
+          WHERE workspace_id = ? AND actor_key = ? AND idempotency_key = ?
+        `).get(workspaceId, actorKey, idempotencyKey) as { task_id: number; payload_hash: string } | undefined
+        if (existing) {
+          return { taskId: existing.task_id, replayed: true, conflict: existing.payload_hash !== payloadHash }
+        }
+      }
+      // Resolve only on first creation: a retry must work even if the project
+      // was subsequently archived and should not allocate a new ticket.
+      const resolvedProjectId = resolveProjectId(db, workspaceId, project_id)
       db.prepare(`
         UPDATE projects
         SET ticket_counter = ticket_counter + 1, updated_at = unixepoch()
@@ -277,10 +301,29 @@ export async function POST(request: NextRequest) {
         JSON.stringify(metadata),
         workspaceId
       )
-      return Number(dbResult.lastInsertRowid)
+      const taskId = Number(dbResult.lastInsertRowid)
+      if (idempotencyKey) {
+        db.prepare(`INSERT INTO task_create_idempotency
+          (workspace_id, actor_key, idempotency_key, payload_hash, task_id) VALUES (?, ?, ?, ?, ?)`)
+          .run(workspaceId, actorKey, idempotencyKey, payloadHash, taskId)
+      }
+      return { taskId, replayed: false, conflict: false }
     })
 
-    const taskId = createTaskTx()
+    const createResult = createTaskTx()
+    if (createResult.conflict) {
+      return NextResponse.json({ error: 'Idempotency key reused with different task payload' }, { status: 409 })
+    }
+    const taskId = createResult.taskId
+    if (createResult.replayed) {
+      const existing = db.prepare(`
+        SELECT t.*, p.name as project_name, p.ticket_prefix as project_prefix
+        FROM tasks t LEFT JOIN projects p ON p.id = t.project_id AND p.workspace_id = t.workspace_id
+        WHERE t.id = ? AND t.workspace_id = ?
+      `).get(taskId, workspaceId) as Task | undefined
+      if (!existing) return NextResponse.json({ error: 'Idempotent task unavailable' }, { status: 409 })
+      return NextResponse.json({ task: mapTaskRow(existing), idempotent_replay: true }, { status: 200 })
+    }
     
     // Log activity
     db_helpers.logActivity('task_created', 'task', taskId, actor, `Created task: ${title}`, {
