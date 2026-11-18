@@ -120,6 +120,11 @@ class RunLedger:
                 created_at INTEGER NOT NULL,
                 result_sha256 TEXT
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS run_checkpoints (
+                run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+                research_task_id INTEGER,
+                validation_task_id INTEGER
+            )""")
 
     def _connection(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -155,6 +160,37 @@ class RunLedger:
         with closing(self._connection()) as db:
             row = db.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return row[0] if row else None
+
+    def checkpoint(self, run_id: str, *, research_task_id: int | None = None,
+                   validation_task_id: int | None = None) -> None:
+        """Monotonic ID binding; refuse reassignment or updates to finalized runs."""
+        if (research_task_id is None and validation_task_id is None) or any(
+            type(value) is not int or value <= 0 for value in (research_task_id, validation_task_id) if value is not None
+        ):
+            raise HandoffError("Invalid checkpoint task IDs")
+        with closing(self._connection()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone() != ("RESERVED",):
+                db.rollback()
+                raise HandoffError("Only reserved runs can be checkpointed")
+            db.execute("INSERT OR IGNORE INTO run_checkpoints(run_id) VALUES(?)", (run_id,))
+            existing = db.execute("SELECT research_task_id,validation_task_id FROM run_checkpoints WHERE run_id=?",
+                                  (run_id,)).fetchone()
+            if any(new is not None and old is not None and new != old for old, new in
+                   zip(existing, (research_task_id, validation_task_id))):
+                db.rollback()
+                raise HandoffError("Conflicting task checkpoint; manual reconciliation required")
+            db.execute("""UPDATE run_checkpoints
+                SET research_task_id=COALESCE(research_task_id,?),
+                    validation_task_id=COALESCE(validation_task_id,?) WHERE run_id=?""",
+                       (research_task_id, validation_task_id, run_id))
+            db.commit()
+
+    def task_ids(self, run_id: str) -> tuple[int | None, int | None]:
+        with closing(self._connection()) as db:
+            row = db.execute("SELECT research_task_id,validation_task_id FROM run_checkpoints WHERE run_id=?",
+                             (run_id,)).fetchone()
+        return tuple(row) if row else (None, None)
 
 
 def run_once(bridge: MissionControlBridge, ledger: RunLedger, packet: dict[str, Any], run_id: str) -> dict[str, Any]:
