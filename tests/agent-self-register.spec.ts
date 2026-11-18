@@ -32,6 +32,37 @@ test.describe('Agent Self-Registration', () => {
     cleanup.push(body.agent.id)
   })
 
+  test('ClearPage specialist roles register and retain their SOUL', async ({ request }) => {
+    const specialists = [
+      { name: `clearpage-strategist-test-${uid()}`, role: 'assistant' },
+      { name: `clearpage-pdf-test-${uid()}`, role: 'agent' },
+    ]
+
+    for (const specialist of specialists) {
+      const registration = await request.post('/api/agents/register', {
+        headers: API_KEY_HEADER,
+        data: specialist,
+      })
+      expect(registration.status()).toBe(201)
+      const registered = await registration.json()
+      expect(registered.agent.name).toBe(specialist.name)
+      expect(registered.agent.role).toBe(specialist.role)
+      cleanup.push(registered.agent.id)
+
+      const soul = `ClearPage isolated test SOUL for ${specialist.name}`
+      const saved = await request.put(`/api/agents/${registered.agent.id}/soul`, {
+        headers: API_KEY_HEADER,
+        data: { soul_content: soul },
+      })
+      expect(saved.ok()).toBe(true)
+      const fetched = await request.get(`/api/agents/${registered.agent.id}/soul`, {
+        headers: API_KEY_HEADER,
+      })
+      expect(fetched.ok()).toBe(true)
+      expect((await fetched.json()).soul_content).toBe(soul)
+    }
+  })
+
   test('POST is idempotent for existing agent', async ({ request }) => {
     const name = `self-reg-idem-${uid()}`
     // First registration

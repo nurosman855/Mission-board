@@ -22,9 +22,11 @@ from urllib.request import Request, urlopen
 from mission_control_bridge import HandoffError, MissionControlBridge
 
 
+NATIVE_AGENT_ROLES = frozenset({"coder", "reviewer", "tester", "devops", "researcher", "assistant", "agent"})
 AGENT_ROLES = {"researcher": ("clearpage-researcher", "researcher"),
                "validator": ("clearpage-validator", "reviewer"),
-               "strategist": ("clearpage-strategist", "general")}
+               "strategist": ("clearpage-strategist", "assistant"),
+               "pdf_creator": ("clearpage-pdf-creator", "agent")}
 
 
 def make_agent_http_transport(base_url: str, api_key: str, *, allow_live_writes: bool = False):
@@ -60,7 +62,8 @@ def agent_instructions(repo_root: Path, role: str) -> str:
     base = Path(repo_root).resolve() / "clearpage" / "agents" / role
     skill_name = {"researcher": "evidence-first-market-research",
                   "validator": "audit-market-evidence",
-                  "strategist": "convert-evidence-to-product-brief"}[role]
+                  "strategist": "convert-evidence-to-product-brief",
+                  "pdf_creator": "build-verified-printables"}[role]
     paths = [base / "SOUL.md", base / "OUTPUT_CONTRACT.md", base / "skills" / skill_name / "SKILL.md"]
     text_parts: list[str] = []
     for path in paths:
@@ -76,12 +79,17 @@ def agent_instructions(repo_root: Path, role: str) -> str:
 def register_native_agents(transport: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
                            repo_root: Path) -> dict[str, int]:
     """Register all configured agents, install instructions in SOUL, verify readback."""
+    # Validate every configuration before making the first remote mutation.
+    if any(native_role not in NATIVE_AGENT_ROLES for _, native_role in AGENT_ROLES.values()):
+        raise HandoffError("Unsupported native Mission Control role")
+    configured = {role: agent_instructions(repo_root, role) for role in AGENT_ROLES}
     registrations: dict[str, int] = {}
     for role, (name, native_role) in AGENT_ROLES.items():
-        instructions = agent_instructions(repo_root, role)
+        instructions = configured[role]
         response = transport("POST", "/api/agents/register", {"name": name, "role": native_role})
         agent = response.get("agent")
-        if not isinstance(agent, dict) or agent.get("name") != name or type(agent.get("id")) is not int:
+        if (not isinstance(agent, dict) or agent.get("name") != name or
+                agent.get("role") != native_role or type(agent.get("id")) is not int):
             raise HandoffError("Mission Control agent registration not confirmed")
         agent_id = agent["id"]
         saved = transport("PUT", f"/api/agents/{agent_id}/soul", {"soul_content": instructions})

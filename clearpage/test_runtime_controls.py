@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from mission_control_bridge import HandoffError, MissionControlBridge
-from runtime_controls import (BudgetedModelCalls, RunLedger, agent_instructions,
+from runtime_controls import (AGENT_ROLES, NATIVE_AGENT_ROLES, BudgetedModelCalls, RunLedger, agent_instructions,
                               make_agent_http_transport, register_native_agents, run_once)
 from test_handoff import packet
 from test_mission_control_bridge import FakeMissionControl
@@ -17,17 +17,23 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class FakeAgentAPI:
-    def __init__(self, corrupt=False):
+    def __init__(self, corrupt=False, wrong_role=False):
         self.agents = {}
         self.souls = {}
         self.corrupt = corrupt
+        self.wrong_role = wrong_role
 
     def __call__(self, method, path, body):
         if method == "POST" and path == "/api/agents/register":
+            if body["role"] not in NATIVE_AGENT_ROLES:
+                raise HandoffError("Native agent API rejects role")
             name = body["name"]
             if name not in self.agents:
                 self.agents[name] = {"name": name, "id": len(self.agents) + 1, "role": body["role"]}
-            return {"agent": self.agents[name]}
+            agent = dict(self.agents[name])
+            if self.wrong_role:
+                agent["role"] = "coder"
+            return {"agent": agent}
         if method == "PUT" and path.endswith("/soul"):
             agent_id = int(path.split("/")[3])
             self.souls[agent_id] = body["soul_content"]
@@ -40,7 +46,7 @@ class FakeAgentAPI:
 
 class InstructionTests(unittest.TestCase):
     def test_loads_each_soul_contract_and_skill(self):
-        for role in ("researcher", "validator", "strategist"):
+        for role in ("researcher", "validator", "strategist", "pdf_creator"):
             text = agent_instructions(ROOT, role)
             self.assertIn("SOUL.md", text)
             self.assertIn("OUTPUT_CONTRACT.md", text)
@@ -51,18 +57,41 @@ class InstructionTests(unittest.TestCase):
         with self.assertRaises(HandoffError):
             agent_instructions(ROOT, "publisher")
 
-    def test_registers_and_verifies_three_native_souls(self):
+    def test_registers_and_verifies_four_native_souls(self):
         api = FakeAgentAPI()
         result = register_native_agents(api, ROOT)
-        self.assertEqual(set(result), {"researcher", "validator", "strategist"})
+        self.assertEqual(set(result), {"researcher", "validator", "strategist", "pdf_creator"})
         self.assertEqual(api.agents["clearpage-validator"]["role"], "reviewer")
         self.assertIn("audit-market-evidence", api.souls[result["validator"]])
-        self.assertEqual(api.agents["clearpage-strategist"]["role"], "general")
+        self.assertEqual(api.agents["clearpage-strategist"]["role"], "assistant")
         self.assertIn("convert-evidence-to-product-brief", api.souls[result["strategist"]])
+        self.assertEqual(api.agents["clearpage-pdf-creator"]["role"], "agent")
+        self.assertIn("build-verified-printables", api.souls[result["pdf_creator"]])
 
     def test_rejects_soul_readback_mismatch(self):
         with self.assertRaises(HandoffError):
             register_native_agents(FakeAgentAPI(corrupt=True), ROOT)
+
+    def test_native_role_configuration_matches_backend_allowed_roles(self):
+        import re
+        source = (ROOT / "src/app/api/agents/register/route.ts").read_text(encoding="utf-8")
+        role_array = re.search(r"const VALID_ROLES\s*=\s*\[([^]]+)\]", source)
+        self.assertIsNotNone(role_array, "Mission Control role API changed")
+        backend_roles = set(re.findall(r"'([^']+)'", role_array.group(1)))
+        self.assertEqual(NATIVE_AGENT_ROLES, backend_roles)
+        self.assertTrue(all(native_role in backend_roles for _, native_role in AGENT_ROLES.values()))
+
+    def test_rejects_wrong_role_readback(self):
+        with self.assertRaises(HandoffError):
+            register_native_agents(FakeAgentAPI(wrong_role=True), ROOT)
+
+    def test_preflight_rejects_unknown_role_without_remote_writes(self):
+        from unittest.mock import patch
+        api = FakeAgentAPI()
+        with patch.dict(AGENT_ROLES, {"strategist": ("clearpage-strategist", "general")}):
+            with self.assertRaises(HandoffError):
+                register_native_agents(api, ROOT)
+        self.assertEqual(api.agents, {})
 
     def test_live_agent_transport_default_denied(self):
         with self.assertRaises(HandoffError):
