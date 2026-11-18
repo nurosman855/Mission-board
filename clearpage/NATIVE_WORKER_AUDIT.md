@@ -16,7 +16,7 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 
 1. **Credential isolation:** Role identity is checked in task metadata, not guaranteed by independently scoped API credentials. Provision restricted role-specific credentials before real autonomous operation.
 2. **Crash recovery:** A crash after a native task transition but before scheduling its successor or recording the ledger result leaves an incomplete run. There is no reconciliation/retry supervisor; recover manually and do not silently replay.
-3. **Queue contention:** The native queue chooses the next assigned role task. A simultaneous worker could claim a different eligible task. Deploy with one controlled task per role, or add an atomic claim-by-ID endpoint before concurrency.
+3. **Queue contention:** The worker now requests its exact task ID with an atomic workspace-and-assignee-scoped claim. The legacy generic queue remains available for other clients; concurrency still requires load testing and care with role credentials.
 4. **Durability:** Native task IDs are returned to the caller but not checkpointed in the SQLite ledger. An unattended restart needs durable stage/task linkage.
 5. **Real evidence:** The Research Packet is a deliberately unverified fixture. `RESEARCH_MORE` is the correct outcome. No product strategy or publication is authorized.
 6. **Operator interface:** These are importable Python steps rather than a durable background worker service or mobile control interface.
@@ -24,3 +24,10 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 ## Decision
 
 **PASS for supervised, single-task-at-a-time offline simulation. NOT READY for unattended or paid execution.** Next development should address claim isolation, durable checkpoints and crash recovery before enabling model providers or external research APIs.
+
+### Task-claim hardening checkpoint
+
+- Explicit `task_id` claim is atomic and does not claim an unrelated role task.
+- Invalid task IDs, unavailable IDs, and role/workspace boundaries are tested.
+- Complete checks: **58 Python tests**, **1,609 JavaScript/TypeScript tests**, and `tsc --noEmit` passed.
+- A local Next.js development-server smoke-test attempt encountered a build-manifest startup error; actual HTTP integration for this new endpoint is **not yet confirmed**. The draft PR must remain under review.
