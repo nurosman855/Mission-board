@@ -23,7 +23,8 @@ from mission_control_bridge import HandoffError, MissionControlBridge
 
 
 AGENT_ROLES = {"researcher": ("clearpage-researcher", "researcher"),
-               "validator": ("clearpage-validator", "reviewer")}
+               "validator": ("clearpage-validator", "reviewer"),
+               "strategist": ("clearpage-strategist", "general")}
 
 
 def make_agent_http_transport(base_url: str, api_key: str, *, allow_live_writes: bool = False):
@@ -57,7 +58,9 @@ def agent_instructions(repo_root: Path, role: str) -> str:
     if role not in AGENT_ROLES:
         raise HandoffError("Unknown ClearPage agent role")
     base = Path(repo_root).resolve() / "clearpage" / "agents" / role
-    skill_name = {"researcher": "evidence-first-market-research", "validator": "audit-market-evidence"}[role]
+    skill_name = {"researcher": "evidence-first-market-research",
+                  "validator": "audit-market-evidence",
+                  "strategist": "convert-evidence-to-product-brief"}[role]
     paths = [base / "SOUL.md", base / "OUTPUT_CONTRACT.md", base / "skills" / skill_name / "SKILL.md"]
     text_parts: list[str] = []
     for path in paths:
@@ -72,7 +75,7 @@ def agent_instructions(repo_root: Path, role: str) -> str:
 
 def register_native_agents(transport: Callable[[str, str, dict[str, Any] | None], dict[str, Any]],
                            repo_root: Path) -> dict[str, int]:
-    """Register both agents, install instructions in SOUL, verify readback."""
+    """Register all configured agents, install instructions in SOUL, verify readback."""
     registrations: dict[str, int] = {}
     for role, (name, native_role) in AGENT_ROLES.items():
         instructions = agent_instructions(repo_root, role)
