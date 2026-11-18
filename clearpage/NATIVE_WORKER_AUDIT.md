@@ -39,3 +39,12 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - Invalid or conflicting checkpoint assignments fail closed; the earlier mapping remains unchanged.
 - Four additional Python tests cover process restart, claimed/reviewed orphan tasks, conflicting bindings and a remote-create/local-checkpoint gap. **62 Python tests pass.**
 - This is **safe restart diagnosis and supervised continuation**, not automated recovery from every crash. An atomic server-side create idempotency key and a recovery supervisor are still needed for unattended operation.
+
+### Server-side task creation idempotency checkpoint
+
+- Migration `056_task_create_idempotency` establishes a unique `(workspace_id, actor_key, idempotency_key)` mapping to the created native task.
+- The task creation transaction returns the existing task for the same canonical request and rejects key reuse with changed payload (HTTP 409), without repeating ticket allocation, notification creation, or sync side effects.
+- ClearPage's bridge supplies deterministic run-and-stage keys for Researcher and Validator task creation.
+- TypeScript checking, existing Vitest suite, and Python unit tests pass. A Playwright HTTP test was added for concurrent same-key retries, conflicts and distinct keys.
+- **Unverified:** The Playwright end-to-end run timed out while building/starting its web server (120 seconds), before executing the new assertions. The server-side race behavior must still be confirmed against the running API. Keep the pull request in draft.
+- **Still open:** No automatic reconciliation supervisor; actor-scoped API permissions require independent enforcement tests; concurrent exact-task claim capacity has not been load-tested.
