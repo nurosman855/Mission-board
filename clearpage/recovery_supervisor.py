@@ -8,6 +8,7 @@ can be explicitly requested by an operator.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -16,7 +17,7 @@ from pathlib import Path
 
 from mission_control_bridge import HandoffError, MissionControlBridge, make_http_transport
 from native_workers import (inspect_interrupted_run, recover_submitted_validation,
-                            verify_submitted_validation)
+                            verify_submitted_validation, _task)
 from runtime_controls import RunLedger
 
 
@@ -61,6 +62,35 @@ def finalize_verified(bridge: MissionControlBridge, ledger: RunLedger, *, run_id
             'remote_writes': 0, 'ai_calls': 0}
 
 
+def reconciliation_case(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str) -> dict:
+    """Produce a stable, read-only operator dossier without copying task contents.
+
+    Only bound native task IDs are inspected. Unbound remote creations cannot
+    be discovered safely; those cases remain blocked for human investigation.
+    """
+    decision = plan(bridge, ledger, run_id=run_id)
+    research_id, validation_id = ledger.task_ids(run_id)
+    tasks: list[dict] = []
+    for stage, task_id, agent in (
+        ('research', research_id, bridge.researcher),
+        ('validation', validation_id, bridge.validator),
+    ):
+        if task_id is None:
+            continue
+        task = _task(bridge, task_id, role=agent, run_id=run_id, stage=stage)
+        tasks.append({'stage': stage, 'task_id': task_id, 'status': task['status'],
+                      'local_lease': ledger.lease_state(run_id, stage)})
+    document = {'run_id': run_id, 'ledger_status': ledger.status(run_id),
+                'decision': decision['decision'], 'tasks': tasks,
+                'operator_instruction': ('Do not reset or reassign a claimed task. Confirm the worker has '
+                                         'stopped, inspect the native task activity and fence expiry, '
+                                         'then reconcile through the administrator workflow. Never '
+                                         'reuse the old run ID for a new attempt.'),
+                'remote_writes': 0, 'ai_calls': 0}
+    digest = hashlib.sha256(json.dumps(document, sort_keys=True).encode()).hexdigest()
+    return {**document, 'case_sha256': digest}
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description='ClearPage conservative recovery inspection')
     parser.add_argument('--run-id', required=True)
@@ -68,11 +98,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--finalize-verified', action='store_true',
                         help='Explicitly approve local-only completion of a verified submitted report')
     parser.add_argument('--watch', action='store_true', help='Read-only periodic monitoring')
+    parser.add_argument('--case', action='store_true', help='Print an operator reconciliation dossier')
     parser.add_argument('--poll-seconds', type=float, default=10)
     parser.add_argument('--max-checks', type=int, default=30)
     args = parser.parse_args(argv)
     if args.watch and args.finalize_verified:
         parser.error('Monitoring cannot finalize or modify tasks')
+    if args.case and (args.watch or args.finalize_verified):
+        parser.error('Reconciliation dossier must be read-only and single-shot')
     if not 1 <= args.poll_seconds <= 300 or not 1 <= args.max_checks <= 10000:
         parser.error('Invalid monitoring bounds')
     if not args.ledger.is_file():
@@ -92,7 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         previous = None
         for check in range(args.max_checks if args.watch else 1):
             output = (finalize_verified(bridge, ledger, run_id=args.run_id, operator_approved=True)
-                      if args.finalize_verified else plan(bridge, ledger, run_id=args.run_id))
+                      if args.finalize_verified else reconciliation_case(bridge, ledger, run_id=args.run_id)
+                      if args.case else plan(bridge, ledger, run_id=args.run_id))
             if output['decision'] != previous:
                 print(json.dumps(output, sort_keys=True), flush=True)
                 previous = output['decision']
