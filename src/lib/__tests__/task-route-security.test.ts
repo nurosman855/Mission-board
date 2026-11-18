@@ -90,4 +90,20 @@ describe('task detail route security', () => {
       error: 'Access denied: agent key may only access its own tasks.',
     })
   })
+
+  it('GET lets Validator inspect only a linked reviewed Researcher source', async () => {
+    const getMock = vi.fn()
+      .mockReturnValueOnce({ id: 42, workspace_id: 7, assigned_to: 'clearpage-researcher',
+        status: 'review', tags: '[]', metadata: JSON.stringify({ stage: 'research',
+          simulation_only: true, clearpage_run_id: 'run-1' }) })
+      .mockReturnValueOnce({ id: 43 })
+    prepareMock.mockReturnValue({ get: getMock })
+    requireRoleMock.mockReturnValue({ user: { username: 'validator', role: 'operator',
+      workspace_id: 7, agent_name: 'clearpage-validator' } })
+    const { GET } = await import('@/app/api/tasks/[id]/route')
+    const response = await GET(new NextRequest('http://localhost/api/tasks/42'),
+      { params: Promise.resolve({ id: '42' }) })
+    expect(response.status).toBe(200)
+    expect(getMock).toHaveBeenLastCalledWith(7, 42, 'run-1')
+  })
 })

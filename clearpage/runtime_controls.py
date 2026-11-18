@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import secrets
 import re
 import sqlite3
 import time
@@ -120,6 +121,20 @@ class RunLedger:
                 created_at INTEGER NOT NULL,
                 result_sha256 TEXT
             )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS run_checkpoints (
+                run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+                research_task_id INTEGER,
+                validation_task_id INTEGER
+            )""")
+            db.execute("""CREATE TABLE IF NOT EXISTS worker_leases (
+                run_id TEXT NOT NULL,
+                stage TEXT NOT NULL CHECK(stage IN ('research','validation')),
+                owner TEXT NOT NULL,
+                token TEXT NOT NULL,
+                expires_at_ms INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY(run_id,stage)
+            )""")
 
     def _connection(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=10, isolation_level=None)
@@ -155,6 +170,99 @@ class RunLedger:
         with closing(self._connection()) as db:
             row = db.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone()
         return row[0] if row else None
+
+    def checkpoint(self, run_id: str, *, research_task_id: int | None = None,
+                   validation_task_id: int | None = None) -> None:
+        """Monotonic ID binding; refuse reassignment or updates to finalized runs."""
+        if (research_task_id is None and validation_task_id is None) or any(
+            type(value) is not int or value <= 0 for value in (research_task_id, validation_task_id) if value is not None
+        ):
+            raise HandoffError("Invalid checkpoint task IDs")
+        with closing(self._connection()) as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT status FROM runs WHERE run_id=?", (run_id,)).fetchone() != ("RESERVED",):
+                db.rollback()
+                raise HandoffError("Only reserved runs can be checkpointed")
+            db.execute("INSERT OR IGNORE INTO run_checkpoints(run_id) VALUES(?)", (run_id,))
+            existing = db.execute("SELECT research_task_id,validation_task_id FROM run_checkpoints WHERE run_id=?",
+                                  (run_id,)).fetchone()
+            if any(new is not None and old is not None and new != old for old, new in
+                   zip(existing, (research_task_id, validation_task_id))):
+                db.rollback()
+                raise HandoffError("Conflicting task checkpoint; manual reconciliation required")
+            db.execute("""UPDATE run_checkpoints
+                SET research_task_id=COALESCE(research_task_id,?),
+                    validation_task_id=COALESCE(validation_task_id,?) WHERE run_id=?""",
+                       (research_task_id, validation_task_id, run_id))
+            db.commit()
+
+    def task_ids(self, run_id: str) -> tuple[int | None, int | None]:
+        with closing(self._connection()) as db:
+            row = db.execute("SELECT research_task_id,validation_task_id FROM run_checkpoints WHERE run_id=?",
+                             (run_id,)).fetchone()
+        return tuple(row) if row else (None, None)
+
+    def acquire_lease(self, run_id: str, stage: str, owner: str, *, ttl_seconds: int = 60,
+                      now_ms: int | None = None) -> str:
+        """Single-owner stage lease; expired leases must be reconciled, never stolen."""
+        if (stage not in {'research', 'validation'} or not isinstance(owner, str) or
+                not owner.strip() or len(owner) > 128 or type(ttl_seconds) is not int or
+                not 5 <= ttl_seconds <= 3600):
+            raise HandoffError('Invalid worker lease parameters')
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        if type(now) is not int or now < 0:
+            raise HandoffError('Invalid lease clock')
+        token = secrets.token_hex(24)
+        with closing(self._connection()) as db:
+            db.execute('BEGIN IMMEDIATE')
+            if db.execute('SELECT status FROM runs WHERE run_id=?', (run_id,)).fetchone() != ('RESERVED',):
+                db.rollback()
+                raise HandoffError('Lease requires an unfinished run')
+            existing = db.execute('SELECT owner,expires_at_ms FROM worker_leases WHERE run_id=? AND stage=?',
+                                  (run_id, stage)).fetchone()
+            if existing:
+                db.rollback()
+                raise HandoffError('Stage lease exists; expired leases require manual reconciliation')
+            db.execute('INSERT INTO worker_leases(run_id,stage,owner,token,expires_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?)',
+                       (run_id, stage, owner, token, now + ttl_seconds * 1000, now))
+            db.commit()
+        return token
+
+    def heartbeat_lease(self, run_id: str, stage: str, owner: str, token: str,
+                        *, ttl_seconds: int = 60, now_ms: int | None = None) -> None:
+        if type(ttl_seconds) is not int or not 5 <= ttl_seconds <= 3600:
+            raise HandoffError('Invalid heartbeat TTL')
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        with closing(self._connection()) as db:
+            db.execute('BEGIN IMMEDIATE')
+            updated = db.execute('''UPDATE worker_leases SET expires_at_ms=?,updated_at_ms=?
+                WHERE run_id=? AND stage=? AND owner=? AND token=? AND expires_at_ms>?''',
+                (now + ttl_seconds * 1000, now, run_id, stage, owner, token, now))
+            if updated.rowcount != 1:
+                db.rollback()
+                raise HandoffError('Lease expired, missing, or owned by another worker')
+            db.commit()
+
+    def lease_state(self, run_id: str, stage: str, *, now_ms: int | None = None) -> str:
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        with closing(self._connection()) as db:
+            row = db.execute('SELECT expires_at_ms FROM worker_leases WHERE run_id=? AND stage=?',
+                             (run_id, stage)).fetchone()
+        if not row:
+            return 'UNCLAIMED'
+        return 'ACTIVE' if row[0] > now else 'EXPIRED_NEEDS_REVIEW'
+
+    def release_lease(self, run_id: str, stage: str, owner: str, token: str,
+                      *, now_ms: int | None = None) -> None:
+        now = int(time.time() * 1000) if now_ms is None else now_ms
+        with closing(self._connection()) as db:
+            db.execute('BEGIN IMMEDIATE')
+            updated = db.execute('''DELETE FROM worker_leases WHERE run_id=? AND stage=?
+                AND owner=? AND token=? AND expires_at_ms>?''', (run_id, stage, owner, token, now))
+            if updated.rowcount != 1:
+                db.rollback()
+                raise HandoffError('Lease cannot be released by this worker')
+            db.commit()
 
 
 def run_once(bridge: MissionControlBridge, ledger: RunLedger, packet: dict[str, Any], run_id: str) -> dict[str, Any]:

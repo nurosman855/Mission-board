@@ -7960,6 +7960,32 @@
         }
       }
     },
+    "/api/tasks/{id}/lease": {
+      "post": {
+        "tags": ["Tasks"],
+        "summary": "Renew current ClearPage worker task lease",
+        "operationId": "renewClearPageTaskLease",
+        "description": "Only a scoped ClearPage agent assigned to an active task may renew its unexpired fencing token. Expired or replaced tokens cannot be resurrected.",
+        "parameters": [{"name": "id", "in": "path", "required": true, "schema": {"type": "integer", "minimum": 1}}],
+        "requestBody": {
+          "required": true,
+          "content": {"application/json": {"schema": {
+            "type": "object", "additionalProperties": false,
+            "required": ["lease_token"],
+            "properties": {"lease_token": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}
+          }}}
+        },
+        "responses": {
+          "200": {"description": "Lease renewed for 120 seconds", "content": {"application/json": {"schema": {
+            "type": "object", "required": ["task_id", "lease_expires_at", "renewed"],
+            "properties": {"task_id": {"type": "integer"}, "lease_expires_at": {"type": "integer"}, "renewed": {"type": "boolean"}}
+          }}}},
+          "400": {"description": "Invalid task ID or token"},
+          "403": {"$ref": "#/components/responses/Forbidden"},
+          "409": {"description": "Lease expired, replaced, or task no longer active"}
+        }
+      }
+    },
     "/api/tasks/{id}/broadcast": {
       "post": {
         "tags": [

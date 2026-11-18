@@ -59,6 +59,7 @@ const taskFields = {
 }
 
 export const createTaskSchema = z.object({
+  idempotency_key: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9:._-]{0,199}$/).optional(),
   title: taskFields.title,
   description: taskFields.description.optional(),
   status: taskFields.status.default('inbox'),
@@ -82,6 +83,7 @@ export const createTaskSchema = z.object({
 
 // Every field optional, NO defaults — see comment above on `taskFields`.
 export const updateTaskSchema = z.object({
+  lease_token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   title: taskFields.title.optional(),
   description: taskFields.description.optional(),
   status: taskFields.status.optional(),

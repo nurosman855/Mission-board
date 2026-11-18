@@ -102,6 +102,38 @@ class InstructionTests(unittest.TestCase):
 
 
 class LedgerTests(unittest.TestCase):
+    def test_worker_lease_exclusive_across_connections_and_fails_closed_after_expiry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'leases.sqlite'
+            first, second = RunLedger(path), RunLedger(path)
+            first.reserve('lease-test')
+            token = first.acquire_lease('lease-test', 'research', 'worker-a', ttl_seconds=5, now_ms=1000)
+            self.assertEqual(second.lease_state('lease-test', 'research', now_ms=5999), 'ACTIVE')
+            with self.assertRaises(HandoffError):
+                second.acquire_lease('lease-test', 'research', 'worker-b', ttl_seconds=5, now_ms=2000)
+            first.heartbeat_lease('lease-test', 'research', 'worker-a', token, ttl_seconds=5, now_ms=4000)
+            self.assertEqual(second.lease_state('lease-test', 'research', now_ms=8999), 'ACTIVE')
+            with self.assertRaises(HandoffError):
+                first.heartbeat_lease('lease-test', 'research', 'worker-a', token, now_ms=9000)
+            self.assertEqual(second.lease_state('lease-test', 'research', now_ms=9000), 'EXPIRED_NEEDS_REVIEW')
+            with self.assertRaises(HandoffError):
+                second.acquire_lease('lease-test', 'research', 'worker-b', now_ms=10000)
+            with self.assertRaises(HandoffError):
+                first.release_lease('lease-test', 'research', 'worker-a', token, now_ms=10000)
+
+    def test_worker_lease_wrong_owner_or_token_cannot_renew_or_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = RunLedger(Path(directory) / 'leases.sqlite')
+            ledger.reserve('lease-test')
+            token = ledger.acquire_lease('lease-test', 'validation', 'worker-a', now_ms=1000)
+            with self.assertRaises(HandoffError):
+                ledger.heartbeat_lease('lease-test', 'validation', 'worker-b', token, now_ms=2000)
+            with self.assertRaises(HandoffError):
+                ledger.release_lease('lease-test', 'validation', 'worker-a', 'wrong', now_ms=2000)
+            self.assertEqual(ledger.lease_state('lease-test', 'validation', now_ms=2000), 'ACTIVE')
+            ledger.release_lease('lease-test', 'validation', 'worker-a', token, now_ms=2000)
+            self.assertEqual(ledger.lease_state('lease-test', 'validation', now_ms=2000), 'UNCLAIMED')
+
     def test_repeat_and_restart_does_not_create_more_tasks(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "runs.sqlite"

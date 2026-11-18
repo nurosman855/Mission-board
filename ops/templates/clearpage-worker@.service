@@ -1,0 +1,33 @@
+[Unit]
+Description=ClearPage fixture worker (%i) — supervised one-shot
+Documentation=https://github.com/nurosman855/Mission-board
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# The service administrator must provision this non-privileged account.
+User=clearpage
+Group=clearpage
+WorkingDirectory=/opt/mission-board
+# Each role has its OWN root-readable file with MC_API_KEY, MC_BASE_URL,
+# CLEARPAGE_RUN_ID. For researcher only, set MC_RESEARCH_PACKET_PATH to a
+# vetted fixture file. Do not put keys in unit arguments or a shared file.
+EnvironmentFile=/etc/clearpage/%i.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/mission-board/clearpage/worker_process.py --role %i --run-id ${CLEARPAGE_RUN_ID} --ledger /var/lib/clearpage/runs.sqlite --allow-live --loop --poll-seconds 2 --timeout-seconds 180
+StateDirectory=clearpage
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+UMask=0077
+ReadWritePaths=/var/lib/clearpage
+TimeoutStartSec=240
+TimeoutStopSec=20
+KillMode=control-group
+# DO NOT automatically restart a worker whose remote claim may have succeeded.
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
