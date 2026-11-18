@@ -125,3 +125,39 @@ def inspect_interrupted_run(bridge: MissionControlBridge, ledger: RunLedger, *, 
         action = "MANUAL_RECONCILIATION"
     return {"run_id": run_id, "state": state, "research_task_id": research_id,
             "validation_task_id": validator_id, "action": action}
+
+
+def recover_submitted_validation(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str) -> dict:
+    """Finalize a fully submitted Validator task after a local ledger crash.
+
+    Never claims tasks, retries work, or trusts a report without recomputing it
+    from the Researcher's stored source packet.
+    """
+    if ledger.status(run_id) != "RESERVED":
+        raise HandoffError("Recovery requires an unfinished reserved run")
+    research_id, validator_id = ledger.task_ids(run_id)
+    if research_id is None or validator_id is None:
+        raise HandoffError("Both task IDs must have durable checkpoints")
+    research = _task(bridge, research_id, role=bridge.researcher, run_id=run_id, stage="research")
+    validation = _task(bridge, validator_id, role=bridge.validator, run_id=run_id, stage="validation")
+    if research.get("status") != "review" or validation.get("status") != "review" or validation["metadata"].get("research_task_id") != research_id:
+        raise HandoffError("Both linked tasks must already be submitted for review")
+    try:
+        source = json.loads(research["resolution"])
+        actual = json.loads(validation["resolution"])
+        packet = source["packet"]
+    except (KeyError, TypeError, ValueError):
+        raise HandoffError("Submitted task result unavailable") from None
+    if (not isinstance(source, dict) or source.get("simulation_only") is not True or
+            validate_research_packet(packet) or packet.get("research_id") != run_id):
+        raise HandoffError("Research source cannot be independently verified")
+    verdict = simulate_handoff(packet)
+    expected = {"verdict": verdict.verdict, "next_step": verdict.next_step,
+                "issues": list(verdict.issues), "simulation_only": True,
+                "product_creation_allowed": False, "ai_calls": 0}
+    if actual != expected:
+        raise HandoffError("Validator result does not match deterministic source verification")
+    result = {"research_task_id": research_id, "validation_task_id": validator_id,
+              "validation_report": expected, "mission_control_status": "review"}
+    ledger.finish(run_id, result)
+    return result
