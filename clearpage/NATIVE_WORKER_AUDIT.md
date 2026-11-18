@@ -102,3 +102,11 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - The only mutation it can authorize is **local SQLite finalization** of an already submitted Validator report, and only with explicit `--finalize-verified`. Before that operation, the report is independently rederived from the Researcher's stored source packet and exact task/run linkage. No remote task writes or model calls occur.
 - Seven additional Python tests cover missing runs, both safe ready stages, claimed tasks, active and expired leases, crash-before-ledger-finalize recovery with explicit approval, and tampered results. **79 Python tests pass**.
 - This is deliberately **not** an unattended recovery supervisor capable of safely unblocking a stale `in_progress` server task. That needs an administrator-approved reconciliation protocol, stronger cross-store transactional coordination, and real deployment testing. A manually authorized worker restart is still required for a safe unclaimed stage.
+
+### Administrative reconciliation evidence checkpoint (2026-11-18)
+
+- Added `--case` to the recovery supervisor. It retrieves only checkpoint-bound, identity-validated native tasks and emits a deterministic `case_sha256` with run status, task IDs, task statuses, local stage-lease statuses, and the required operator action. Full research/validation payloads and API secrets are excluded from the dossier.
+- Added `clearpage/RECOVERY_PLAYBOOK.md` with an operator-first procedure for pausing a role, verifying that the process is actually dead, collecting the case and native audit history, handling uncertain `in_progress` claims without replay, and preserving the original run ID and task record.
+- The playbook explicitly forbids using a new run to conceal an unresolved old task. The supervisor still performs **zero remote mutations** and does not provide an automatic administrative reset or close endpoint.
+- Two extra crash/identity tests verify deterministic dossiers, read-only calls, redaction, and refusal when a remote task belongs to a different run. **81 Python tests pass.**
+- **Still blocked:** A human administrator must inspect and resolve ambiguous native states. Real administrative UI recovery, deployed process-stop proof, lost-update races between inspection and administrator action, network partitions, and load testing remain unverified.
