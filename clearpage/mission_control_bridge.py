@@ -82,6 +82,17 @@ class MissionControlBridge:
             raise HandoffError("Queue returned a different task or an unclaimed task")
         return response.get("lease_token")
 
+    def renew_task_lease(self, task_id: int, lease_token: str) -> int:
+        """Explicit bounded renewal; never resurrect an expired fence."""
+        if (type(task_id) is not int or task_id <= 0 or not isinstance(lease_token, str) or
+                len(lease_token) != 64 or any(ch not in "0123456789abcdef" for ch in lease_token)):
+            raise HandoffError("Invalid task lease renewal inputs")
+        response = self.transport("POST", f"/api/tasks/{task_id}/lease", {"lease_token": lease_token})
+        expiry = response.get("lease_expires_at")
+        if response.get("task_id") != task_id or response.get("renewed") is not True or type(expiry) is not int:
+            raise HandoffError("Mission Control did not confirm renewed task lease")
+        return expiry
+
     def _submit_for_review(self, task_id: int, resolution: dict[str, Any], lease_token: str | None = None) -> None:
         payload = {
             "status": "review", "resolution": json.dumps(resolution, sort_keys=True),
