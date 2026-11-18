@@ -73,18 +73,22 @@ class MissionControlBridge:
             raise HandoffError("Mission Control did not confirm task creation and assignment")
         return task["id"]
 
-    def _claim(self, name: str, task_id: int) -> None:
+    def _claim(self, name: str, task_id: int) -> str | None:
         from urllib.parse import quote
 
         response = self.transport("GET", f"/api/tasks/queue?agent={quote(name, safe='')}&task_id={task_id}", None)
         task = response.get("task")
         if not isinstance(task, dict) or task.get("id") != task_id or task.get("assigned_to") != name or task.get("status") != "in_progress":
             raise HandoffError("Queue returned a different task or an unclaimed task")
+        return response.get("lease_token")
 
-    def _submit_for_review(self, task_id: int, resolution: dict[str, Any]) -> None:
-        response = self.transport("PUT", f"/api/tasks/{task_id}", {
+    def _submit_for_review(self, task_id: int, resolution: dict[str, Any], lease_token: str | None = None) -> None:
+        payload = {
             "status": "review", "resolution": json.dumps(resolution, sort_keys=True),
-        })
+        }
+        if lease_token:
+            payload["lease_token"] = lease_token
+        response = self.transport("PUT", f"/api/tasks/{task_id}", payload)
         if response.get("task", {}).get("status") != "review":
             raise HandoffError("Mission Control did not confirm review status")
 
@@ -106,18 +110,18 @@ class MissionControlBridge:
         metadata = {"clearpage_run_id": run_id, "simulation_only": True, "stage": "research"}
         research_id = self._create("[SIM] Research: " + packet["research_question"], self.researcher,
                                    "Preconstructed offline research fixture; do not perform web/API calls.", metadata)
-        self._claim(self.researcher, research_id)
-        self._submit_for_review(research_id, {"packet": packet, "simulation_only": True})
+        research_token = self._claim(self.researcher, research_id)
+        self._submit_for_review(research_id, {"packet": packet, "simulation_only": True}, research_token)
 
         validation_id = self._create("[SIM] Validate Research Packet", self.validator,
                                      f"Audit fixture from research task {research_id}; do not use external tools.",
                                      {"clearpage_run_id": run_id, "simulation_only": True,
                                       "stage": "validation", "research_task_id": research_id})
-        self._claim(self.validator, validation_id)
+        validation_token = self._claim(self.validator, validation_id)
         verdict = simulate_handoff(packet)
         report = {"verdict": verdict.verdict, "next_step": verdict.next_step,
                   "issues": list(verdict.issues), "product_creation_allowed": False,
                   "ai_calls": 0, "simulation_only": True}
-        self._submit_for_review(validation_id, report)
+        self._submit_for_review(validation_id, report, validation_token)
         return {"research_task_id": research_id, "validation_task_id": validation_id,
                 "validation_report": report, "mission_control_status": "review"}
