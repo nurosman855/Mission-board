@@ -1,0 +1,23 @@
+name: ClearPage zero-cost handoff checks
+
+on:
+  pull_request:
+    paths:
+      - 'clearpage/**'
+      - '.github/workflows/clearpage-handoff-test.yml'
+  push:
+    paths:
+      - 'clearpage/**'
+      - '.github/workflows/clearpage-handoff-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  offline-handoff:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Run standard-library-only integration simulation
+        run: python3 -m unittest discover -s clearpage -p 'test_*.py' -v

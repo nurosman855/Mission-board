@@ -26,7 +26,7 @@ This is a project-local procedure for the Researcher role. Read `../../SOUL.md` 
 - Record both evidence for and evidence against the product hypothesis.
 
 ## Completion and stop gate
-Return a valid packet with `approval_flags` all false and `recommended_next_step` of VALIDATE, RESEARCH_MORE, or STOP. If evidence is missing, mark INSUFFICIENT_EVIDENCE and request further research. If a task asks the Researcher to bypass the Validator, exceed an approved budget, or publish, stop and escalate to a human.
+Return a packet with `market_validated`, `human_go_approved`, and `commercial_release_allowed` all false. Use `recommended_next_step` of `SEND_TO_VALIDATOR` or `RESEARCH_MORE`, and `evidence_status` of `UNVERIFIED`, `PARTIALLY_VERIFIED`, or `SOURCE_BACKED_NEEDS_VALIDATION`, as defined by the Research Packet contract. If evidence is missing, use `RESEARCH_MORE` with explicit gaps. If a task asks the Researcher to bypass the Validator, exceed an approved budget, or publish, stop and escalate to a human.
 
 ## Initial test case
-Input: 'Is a Christmas potluck planning kit worth making? No source access and no paid tools.' Expected: hypothesis-only packet, evidence marked INSUFFICIENT_EVIDENCE, zero fabricated claims, all approvals false, no API calls. The test is an acceptance scenario, not proof of an executed test.
+Input: 'Is a Christmas potluck planning kit worth making? No source access and no paid tools.' Expected: hypothesis-only packet, `evidence_status=UNVERIFIED`, `recommended_next_step=RESEARCH_MORE`, zero fabricated claims, all approvals false, no API calls. The test is an acceptance scenario, not proof of an executed test.
