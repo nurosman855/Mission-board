@@ -58,3 +58,11 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - These tests verify the specific ClearPage task routes above, not a whole-platform least-privilege or adversarial security audit. Do not enable broader permissions or assume other API endpoints are isolated without separate verification.
 - `recover_submitted_validation` can safely finalize the ledger when both tasks are already in review and a deterministic recomputation matches the Validator's stored report. It cannot recover ambiguous partial remote transitions or perform unattended retries.
 - Crash-injection tests cover failure after remote Validator submission and before local completion, and rejection of tampered Validator output. **65 Python tests pass; targeted access-control tests and TypeScript checking pass.**
+
+### Supervised worker leases checkpoint
+
+- SQLite now persists a per-run/per-stage lease with an unpredictable token, owner identity, expiry, and heartbeat timestamp. Acquisition, heartbeat and release use `BEGIN IMMEDIATE` and compare exact owner/token.
+- Two worker processes sharing the ledger cannot acquire the same stage lease simultaneously. An expired lease **cannot** be stolen or silently renewed: it reports `EXPIRED_NEEDS_REVIEW` until an operator reconciles the native task.
+- `research_with_lease` and `validation_with_lease` wrap the existing zero-cost worker steps. An exception deliberately retains the lease instead of pretending the remote operation was safely undone.
+- Tests cover concurrent ownership, wrong token/owner, heartbeat, expiry, no automatic takeover, and a successfully completed leased handoff. **69 Python tests pass.**
+- **Not production-ready:** These leases are local coordination fences, not server-enforced task-write fencing tokens. They are not yet automatically heartbeated during long-running operations, and no unattended lease-recovery supervisor is deployed. A stale process could still attempt a native API write; do not enable automatic reassignment until the server verifies a fencing token for final submission.
