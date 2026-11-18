@@ -21,8 +21,11 @@ class FakeMissionControl:
             self.tasks[task["id"]] = task
             return {"task": task.copy()}
         if method == "GET" and path.startswith("/api/tasks/queue?"):
-            agent = parse_qs(urlsplit(path).query)["agent"][0]
-            matches = [t for t in self.tasks.values() if t["assigned_to"] == agent and t["status"] == "assigned"]
+            params = parse_qs(urlsplit(path).query)
+            agent = params["agent"][0]
+            requested_id = int(params["task_id"][0]) if "task_id" in params else None
+            matches = [t for t in self.tasks.values() if t["assigned_to"] == agent and t["status"] == "assigned"
+                       and (requested_id is None or t["id"] == requested_id)]
             if not matches:
                 return {"task": None, "reason": "no_tasks_available"}
             task = matches[0]
@@ -37,6 +40,15 @@ class FakeMissionControl:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_explicit_claim_never_consumes_an_earlier_same_role_task(self):
+        mc = FakeMissionControl()
+        bridge = MissionControlBridge(mc)
+        first = bridge._create("other task", bridge.researcher, "", {"simulation_only": True})
+        second = bridge._create("intended task", bridge.researcher, "", {"simulation_only": True})
+        bridge._claim(bridge.researcher, second)
+        self.assertEqual(mc.tasks[first]["status"], "assigned")
+        self.assertEqual(mc.tasks[second]["status"], "in_progress")
+
     def test_live_transport_requires_opt_in(self):
         with self.assertRaises(HandoffError):
             make_http_transport("http://localhost:3000", "test-key")
