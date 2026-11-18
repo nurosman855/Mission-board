@@ -13,6 +13,7 @@ import { pushTaskToGnap } from '@/lib/gnap-sync';
 import { config } from '@/lib/config';
 import { createHash } from 'crypto';
 import { requireWorkspaceId } from '@/lib/enforcement/workspace-scope';
+import { mayAgentCreateTask } from '@/lib/enforcement/clearpage-task-creation';
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
   if (!prefix || typeof num !== 'number' || !Number.isFinite(num) || num <= 0) return undefined
@@ -229,6 +230,9 @@ export async function POST(request: NextRequest) {
     // (issue #663). Opt-in via MC_COORDINATOR_AGENT; when unset, tasks created
     // without an assignee stay unassigned (config.coordinatorAgent === '').
     const finalAssignedTo = resolveTaskAssignee(assigned_to, config.coordinatorAgent)
+    if (!mayAgentCreateTask(db, auth.user, workspaceId, finalAssignedTo, metadata)) {
+      return NextResponse.json({ error: 'Agent key cannot create this task' }, { status: 403 })
+    }
 
     const normalizedStatus = normalizeTaskCreateStatus(status, finalAssignedTo)
 
