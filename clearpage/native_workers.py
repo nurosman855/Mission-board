@@ -53,8 +53,8 @@ def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id
     task = _task(bridge, research_task_id, role=bridge.researcher, run_id=run_id, stage="research")
     if task.get("status") != "assigned":
         raise HandoffError("Research task not available for first claim")
-    bridge._claim(bridge.researcher, research_task_id)
-    bridge._submit_for_review(research_task_id, {"packet": packet, "simulation_only": True})
+    lease_token = bridge._claim(bridge.researcher, research_task_id)
+    bridge._submit_for_review(research_task_id, {"packet": packet, "simulation_only": True}, lease_token)
     validator_id = bridge._create("[SIM] Validate Research Packet", bridge.validator,
                           f"Inspect immutable Research Packet from task {research_task_id}.",
                           {"clearpage_run_id": run_id, "stage": "validation", "simulation_only": True,
@@ -90,12 +90,12 @@ def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
     if (resolution.get("simulation_only") is not True or
             validate_research_packet(packet) or packet.get("research_id") != run_id):
         raise HandoffError("Invalid or unauthorized Researcher resolution")
-    bridge._claim(bridge.validator, validation_task_id)
+    lease_token = bridge._claim(bridge.validator, validation_task_id)
     verdict = simulate_handoff(packet)
     report = {"verdict": verdict.verdict, "next_step": verdict.next_step,
               "issues": list(verdict.issues), "simulation_only": True,
               "product_creation_allowed": False, "ai_calls": 0}
-    bridge._submit_for_review(validation_task_id, report)
+    bridge._submit_for_review(validation_task_id, report, lease_token)
     result = {"research_task_id": research_task_id, "validation_task_id": validation_task_id,
               "validation_report": report, "mission_control_status": "review"}
     ledger.finish(run_id, result)
