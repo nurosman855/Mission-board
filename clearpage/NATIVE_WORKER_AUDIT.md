@@ -135,3 +135,10 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - Added `clearpage/ledger_backup.py` using SQLite's online backup API and exclusive, non-overwriting publish. Four tests verify transaction-consistent checkpoint restoration, rejection of an existing destination, invalid paths, and corruption. Source database files are never deleted or overwritten.
 - Both systemd templates passed `systemd-analyze verify` on the Linux test host. The **complete Python suite has 95 passing tests**.
 - **Explicit limitation:** The systemd services were **not** installed or run on Nur's actual computer, and a 24-hour persistent service run has not happened. This checkpoint supplies tested templates and local backup mechanics, not production deployment acceptance. No paid model calls were made.
+
+### Windows-first operator path (2026-11-18)
+
+- Nur selected a Windows PC as the initial host. Added `clearpage/WINDOWS_DEPLOYMENT.md` and two per-user PowerShell scripts: `windows/Save-ScopedKey.ps1` (DPAPI-encrypted per-role secret capture, no overwrite) and `windows/Start-ScopedWorker.ps1` (one Researcher, Validator or read-only monitor against the local persistent SQLite ledger).
+- The launcher resolves an explicit repository root, requires a reviewed Researcher fixture path, limits remote URLs to HTTPS or loopback HTTP, and restores its process environment when the child finishes. It does not install a Scheduled Task, change execution policy or configure automatic worker restart.
+- Three portable static contract tests verify secure-key input, role/environment separation and absence of automatic-restart or privilege-elevation commands. **98 Python tests pass**.
+- **Important:** This Linux environment has no `pwsh` runtime, so neither PowerShell parsing nor execution, DPAPI decryption, Windows Task Scheduler, or Windows account permissions could be verified. These require a supervised test on Nur's actual PC before startup automation is authorized. The PR remains draft.
