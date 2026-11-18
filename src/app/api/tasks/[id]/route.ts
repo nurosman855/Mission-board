@@ -12,6 +12,7 @@ import { syncTaskOutbound } from '@/lib/github-sync-engine';
 import { removeTaskFromGnap } from '@/lib/gnap-sync';
 import { config } from '@/lib/config';
 import { requireAgentTaskAccess, requireWorkspaceId } from '@/lib/enforcement/workspace-scope';
+import { createHash } from 'crypto';
 
 function formatTicketRef(prefix?: string | null, num?: number | null): string | undefined {
   if (!prefix || typeof num !== 'number' || !Number.isFinite(num) || num <= 0) return undefined
@@ -150,6 +151,22 @@ export async function PUT(
 
     const taskDeny = requireAgentTaskAccess(auth.user, currentTask.assigned_to ?? null);
     if (taskDeny) return taskDeny;
+
+    const clearpageWorker = auth.user.role !== 'admin' &&
+      ['clearpage-researcher', 'clearpage-validator'].includes(auth.user.agent_name || '')
+    if (clearpageWorker && currentTask.status !== 'in_progress') {
+      return NextResponse.json({ error: 'Worker may update only its active task' }, { status: 409 })
+    }
+    if (clearpageWorker && (body.status !== 'review' || typeof body.resolution !== 'string' ||
+        Object.keys(body).some(key => !['status', 'resolution', 'lease_token'].includes(key)))) {
+      return NextResponse.json({ error: 'Worker may only submit a review result' }, { status: 403 })
+    }
+    const fencedSubmission = clearpageWorker
+    const tokenHash = fencedSubmission && body.lease_token
+      ? createHash('sha256').update(body.lease_token).digest('hex') : null
+    if (fencedSubmission && !tokenHash) {
+      return NextResponse.json({ error: 'Active task lease token required' }, { status: 403 })
+    }
 
     const {
       title,
@@ -319,9 +336,17 @@ export async function PUT(
       UPDATE tasks 
       SET ${fieldsToUpdate.join(', ')}
       WHERE id = ? AND workspace_id = ?
+      ${fencedSubmission ? `AND status = 'in_progress' AND EXISTS (
+        SELECT 1 FROM clearpage_task_fences f WHERE f.task_id=tasks.id
+        AND f.workspace_id=tasks.workspace_id AND f.agent_name=tasks.assigned_to
+        AND f.token_hash=? AND f.expires_at>unixepoch()
+      )` : ''}
     `);
-    
-    stmt.run(...updateParams);
+
+    const write = stmt.run(...updateParams, ...(fencedSubmission ? [tokenHash] : []));
+    if (fencedSubmission && write.changes !== 1) {
+      return NextResponse.json({ error: 'Task lease expired or replaced' }, { status: 409 })
+    }
     
     // Track changes and log activities
     const changes: string[] = [];
