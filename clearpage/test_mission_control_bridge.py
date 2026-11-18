@@ -40,6 +40,14 @@ class FakeMissionControl:
 
 
 class BridgeTests(unittest.TestCase):
+    def test_clearpage_task_create_has_stable_server_idempotency_key(self):
+        mc = FakeMissionControl()
+        bridge = MissionControlBridge(mc)
+        metadata = {"clearpage_run_id": "fixture-001", "stage": "validation", "simulation_only": True}
+        bridge._create("Validate", bridge.validator, "", metadata)
+        payload = mc.calls[-1][2]
+        self.assertEqual(payload["idempotency_key"], "clearpage:fixture-001:validation")
+
     def test_explicit_claim_never_consumes_an_earlier_same_role_task(self):
         mc = FakeMissionControl()
         bridge = MissionControlBridge(mc)
