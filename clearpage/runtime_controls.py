@@ -24,7 +24,8 @@ from mission_control_bridge import HandoffError, MissionControlBridge
 
 AGENT_ROLES = {"researcher": ("clearpage-researcher", "researcher"),
                "validator": ("clearpage-validator", "reviewer"),
-               "strategist": ("clearpage-strategist", "general")}
+               "strategist": ("clearpage-strategist", "general"),
+               "pdf_creator": ("clearpage-pdf-creator", "general")}
 
 
 def make_agent_http_transport(base_url: str, api_key: str, *, allow_live_writes: bool = False):
@@ -60,7 +61,8 @@ def agent_instructions(repo_root: Path, role: str) -> str:
     base = Path(repo_root).resolve() / "clearpage" / "agents" / role
     skill_name = {"researcher": "evidence-first-market-research",
                   "validator": "audit-market-evidence",
-                  "strategist": "convert-evidence-to-product-brief"}[role]
+                  "strategist": "convert-evidence-to-product-brief",
+                  "pdf_creator": "build-verified-printables"}[role]
     paths = [base / "SOUL.md", base / "OUTPUT_CONTRACT.md", base / "skills" / skill_name / "SKILL.md"]
     text_parts: list[str] = []
     for path in paths:
