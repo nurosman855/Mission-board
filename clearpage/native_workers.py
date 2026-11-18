@@ -34,15 +34,18 @@ def schedule(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str, qu
         raise HandoffError("Invalid scheduling parameters")
     ledger.reserve(run_id)
     try:
-        return bridge._create("[SIM] Research: " + question, bridge.researcher,
+        task_id = bridge._create("[SIM] Research: " + question, bridge.researcher,
                               "Independent Researcher worker must claim and submit fixture evidence.",
                               {"clearpage_run_id": run_id, "stage": "research", "simulation_only": True})
+        ledger.checkpoint(run_id, research_task_id=task_id)
+        return task_id
     except BaseException:
         ledger.finish(run_id, None)
         raise
 
 
-def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id: str, packet: dict) -> int:
+def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id: str, packet: dict,
+                  ledger: RunLedger | None = None) -> int:
     """Researcher worker: claim its own task, submit packet, schedule Validator."""
     issues = validate_research_packet(packet)
     if issues or packet.get("research_id") != run_id:
@@ -52,10 +55,13 @@ def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id
         raise HandoffError("Research task not available for first claim")
     bridge._claim(bridge.researcher, research_task_id)
     bridge._submit_for_review(research_task_id, {"packet": packet, "simulation_only": True})
-    return bridge._create("[SIM] Validate Research Packet", bridge.validator,
+    validator_id = bridge._create("[SIM] Validate Research Packet", bridge.validator,
                           f"Inspect immutable Research Packet from task {research_task_id}.",
                           {"clearpage_run_id": run_id, "stage": "validation", "simulation_only": True,
                            "research_task_id": research_task_id})
+    if ledger is not None:
+        ledger.checkpoint(run_id, research_task_id=research_task_id, validation_task_id=validator_id)
+    return validator_id
 
 
 def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
@@ -63,6 +69,10 @@ def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
     """Validator worker: independently retrieve Researcher's submitted packet."""
     if ledger.status(run_id) != "RESERVED":
         raise HandoffError("Run not reserved or already finalized")
+    recorded_research, recorded_validation = ledger.task_ids(run_id)
+    if ((recorded_research is not None and recorded_research != research_task_id) or
+            (recorded_validation is not None and recorded_validation != validation_task_id)):
+        raise HandoffError("Native task IDs disagree with durable checkpoint")
     validation = _task(bridge, validation_task_id, role=bridge.validator, run_id=run_id,
                        stage="validation")
     if (validation.get("status") != "assigned" or
@@ -90,3 +100,28 @@ def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
               "validation_report": report, "mission_control_status": "review"}
     ledger.finish(run_id, result)
     return result
+
+
+def inspect_interrupted_run(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str) -> dict:
+    """Read-only recovery diagnosis. Never release claims or replay remote writes."""
+    state = ledger.status(run_id)
+    if state is None:
+        raise HandoffError("Unknown run ID")
+    research_id, validator_id = ledger.task_ids(run_id)
+    if state != "RESERVED":
+        return {"run_id": run_id, "state": state, "action": "NO_REPLAY"}
+    if research_id is None:
+        return {"run_id": run_id, "state": state, "action": "MANUAL_RECONCILIATION",
+                "reason": "Remote research creation may have succeeded before checkpoint"}
+    research = _task(bridge, research_id, role=bridge.researcher, run_id=run_id, stage="research")
+    if research["status"] == "assigned" and validator_id is None:
+        action = "RESEARCH_READY"
+    elif research["status"] == "review" and validator_id is not None:
+        validation = _task(bridge, validator_id, role=bridge.validator, run_id=run_id, stage="validation")
+        if validation["metadata"].get("research_task_id") != research_id:
+            raise HandoffError("Recovered validation task has different source")
+        action = "VALIDATION_READY" if validation["status"] == "assigned" else "MANUAL_RECONCILIATION"
+    else:
+        action = "MANUAL_RECONCILIATION"
+    return {"run_id": run_id, "state": state, "research_task_id": research_id,
+            "validation_task_id": validator_id, "action": action}
