@@ -7,7 +7,9 @@ import unittest
 from pathlib import Path
 
 from mission_control_bridge import HandoffError, MissionControlBridge
-from native_workers import inspect_interrupted_run, recover_submitted_validation, research_step, schedule, validation_step
+from native_workers import (inspect_interrupted_run, recover_submitted_validation,
+                            research_step, research_with_lease, schedule, validation_step,
+                            validation_with_lease)
 from runtime_controls import RunLedger
 from test_handoff import packet
 from test_mission_control_bridge import FakeMissionControl
@@ -133,6 +135,24 @@ class NativeWorkersTests(unittest.TestCase):
         result = inspect_interrupted_run(self.bridge, self.ledger, run_id=self.run_id)
         self.assertEqual(result["action"], "MANUAL_RECONCILIATION")
         self.assertEqual(self.api.calls, [])
+
+    def test_expired_lease_blocks_automatic_reexecution(self):
+        research_id = self.start()
+        self.ledger.acquire_lease(self.run_id, 'research', 'crashed-worker', ttl_seconds=5, now_ms=1000)
+        state = inspect_interrupted_run(self.bridge, self.ledger, run_id=self.run_id)
+        self.assertEqual(state['action'], 'MANUAL_RECONCILIATION')
+        self.assertEqual(self.api.tasks[research_id]['status'], 'assigned')
+
+    def test_leased_workers_finish_without_leaving_claim(self):
+        research_id = self.start()
+        validator_id = research_with_lease(self.bridge, self.ledger, run_id=self.run_id,
+                                           research_task_id=research_id, packet=packet(), owner='worker-r')
+        self.assertEqual(self.ledger.lease_state(self.run_id, 'research'), 'UNCLAIMED')
+        result = validation_with_lease(self.bridge, self.ledger, run_id=self.run_id,
+                                       research_task_id=research_id, validation_task_id=validator_id,
+                                       owner='worker-v')
+        self.assertEqual(result['validation_report']['verdict'], 'RESEARCH_MORE')
+        self.assertEqual(self.ledger.lease_state(self.run_id, 'validation'), 'UNCLAIMED')
 
     def test_recovers_after_validator_review_but_before_ledger_finish(self):
         research_id = self.start()
