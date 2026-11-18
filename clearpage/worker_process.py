@@ -31,6 +31,14 @@ class ScopedWorkerBridge(MissionControlBridge):
         return token
 
 
+def resolve_packet_path(role: str, cli_path: Path | None, environ: dict[str, str]) -> Path | None:
+    """Researcher-only environment fallback used by supervised service units."""
+    if role != 'research':
+        return None
+    return cli_path or (Path(environ['MC_RESEARCH_PACKET_PATH'])
+                        if environ.get('MC_RESEARCH_PACKET_PATH') else None)
+
+
 def execute(role: str, bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str,
             packet: dict | None = None, question: str | None = None,
             owner: str = 'worker') -> dict:
@@ -84,6 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error('MC_API_KEY environment variable required')
     if not args.ledger.parent.is_dir():
         parser.error('Ledger parent directory must exist')
+    args.packet = resolve_packet_path(args.role, args.packet, os.environ)
     if args.role == 'research' and not args.packet:
         parser.error('Researcher requires an offline --packet')
     if args.role == 'research':
