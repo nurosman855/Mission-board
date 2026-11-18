@@ -1,0 +1,27 @@
+[Unit]
+Description=ClearPage read-only recovery monitor (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=clearpage
+Group=clearpage
+WorkingDirectory=/opt/mission-board
+EnvironmentFile=/etc/clearpage/%i.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/mission-board/clearpage/recovery_supervisor.py --run-id ${CLEARPAGE_RUN_ID} --ledger /var/lib/clearpage/runs.sqlite --watch --poll-seconds 30 --max-checks 120
+StateDirectory=clearpage
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+UMask=0077
+ReadWritePaths=/var/lib/clearpage
+TimeoutStartSec=3700
+TimeoutStopSec=20
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
