@@ -71,7 +71,7 @@ class MissionControlBridge:
     def _claim(self, name: str, task_id: int) -> None:
         from urllib.parse import quote
 
-        response = self.transport("GET", f"/api/tasks/queue?agent={quote(name, safe='')}", None)
+        response = self.transport("GET", f"/api/tasks/queue?agent={quote(name, safe='')}&task_id={task_id}", None)
         task = response.get("task")
         if not isinstance(task, dict) or task.get("id") != task_id or task.get("assigned_to") != name or task.get("status") != "in_progress":
             raise HandoffError("Queue returned a different task or an unclaimed task")
