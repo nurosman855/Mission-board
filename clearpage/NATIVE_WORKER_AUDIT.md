@@ -15,9 +15,9 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 ## Open production blockers
 
 1. **Credential isolation:** Role identity is checked in task metadata, not guaranteed by independently scoped API credentials. Provision restricted role-specific credentials before real autonomous operation.
-2. **Crash recovery:** A crash after a native task transition but before scheduling its successor or recording the ledger result leaves an incomplete run. There is no reconciliation/retry supervisor; recover manually and do not silently replay.
+2. **Crash recovery:** The SQLite ledger now persists native Researcher/Validator task IDs and a read-only restart inspector identifies safe pending stages. Ambiguous transitions (remote creation before checkpoint, claimed-but-unsubmitted task, reviewed Researcher without linked Validator, or reviewed Validator without finalized ledger) are deliberately **manual reconciliation**. No automatic replay supervisor or lease-expiration policy exists.
 3. **Queue contention:** The worker now requests its exact task ID with an atomic workspace-and-assignee-scoped claim. The legacy generic queue remains available for other clients; concurrency still requires load testing and care with role credentials.
-4. **Durability:** Native task IDs are returned to the caller but not checkpointed in the SQLite ledger. An unattended restart needs durable stage/task linkage.
+4. **Durability:** Native task IDs are checkpointed monotonically in the SQLite ledger when the caller supplies the ledger to `research_step`. A crash between remote mutation and local checkpoint is necessarily ambiguous without server-side idempotency keys.
 5. **Real evidence:** The Research Packet is a deliberately unverified fixture. `RESEARCH_MORE` is the correct outcome. No product strategy or publication is authorized.
 6. **Operator interface:** These are importable Python steps rather than a durable background worker service or mobile control interface.
 
@@ -31,3 +31,11 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - Invalid task IDs, unavailable IDs, and role/workspace boundaries are tested.
 - Complete checks: **58 Python tests**, **1,609 JavaScript/TypeScript tests**, and `tsc --noEmit` passed.
 - A local Next.js development-server smoke-test attempt encountered a build-manifest startup error; actual HTTP integration for this new endpoint is **not yet confirmed**. The draft PR must remain under review.
+
+### Restart and crash-injection checkpoint
+
+- Restarting `RunLedger` from the same SQLite path preserves the Researcher and Validator IDs.
+- `inspect_interrupted_run` reads native task states and returns `RESEARCH_READY`, `VALIDATION_READY`, `NO_REPLAY`, or `MANUAL_RECONCILIATION` without writing to the server.
+- Invalid or conflicting checkpoint assignments fail closed; the earlier mapping remains unchanged.
+- Four additional Python tests cover process restart, claimed/reviewed orphan tasks, conflicting bindings and a remote-create/local-checkpoint gap. **62 Python tests pass.**
+- This is **safe restart diagnosis and supervised continuation**, not automated recovery from every crash. An atomic server-side create idempotency key and a recovery supervisor are still needed for unattended operation.
