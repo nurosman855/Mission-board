@@ -56,6 +56,28 @@ or shared shell history.
   secret injection, and external network outage recovery need acceptance tests
   on the actual target host. Local smoke testing does **not** certify them.
 
+## Bounded local reliability probe
+
+With the isolated local board already running, all native agent roles registered,
+and distinct scoped agent credentials provisioned, supply three environment
+variables to the test shell: `MC_COORDINATOR_API_KEY`, `MC_RESEARCH_API_KEY`,
+and `MC_VALIDATION_API_KEY`. They must all differ. Then run:
+
+```bash
+python clearpage/soak_fixture.py --ack-isolated-fixture --base-url http://127.0.0.1:3000 --ledger /path/to/existing-directory/soak.sqlite --runs 10
+```
+
+The probe explicitly refuses nonlocal URLs and shared role credentials. It
+uses a fresh unpredictable run ID per iteration, launches coordinator,
+Researcher and Validator as separate OS processes, reopens the SQLite ledger,
+validates `RESEARCH_MORE` with zero model calls and verifies that a replay fails.
+There are no silent retries; the probe aborts on the first uncertain result.
+The runner is **bounded** and terminates all child processes when it stops.
+
+This tests multiple complete fixture runs, **not** continuous weeks-long
+uptime or remote host failover. Preserve the test ledger for audit and never
+reuse its run IDs.
+
 ## Checks executed locally
 
 - The prepared Next.js standalone server started and returned a successful
