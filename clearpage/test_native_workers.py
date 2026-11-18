@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 
 from mission_control_bridge import HandoffError, MissionControlBridge
-from native_workers import inspect_interrupted_run, research_step, schedule, validation_step
+from native_workers import inspect_interrupted_run, recover_submitted_validation, research_step, schedule, validation_step
 from runtime_controls import RunLedger
 from test_handoff import packet
 from test_mission_control_bridge import FakeMissionControl
@@ -133,6 +133,35 @@ class NativeWorkersTests(unittest.TestCase):
         result = inspect_interrupted_run(self.bridge, self.ledger, run_id=self.run_id)
         self.assertEqual(result["action"], "MANUAL_RECONCILIATION")
         self.assertEqual(self.api.calls, [])
+
+    def test_recovers_after_validator_review_but_before_ledger_finish(self):
+        research_id = self.start()
+        validator_id = research_step(self.bridge, research_task_id=research_id,
+                                     run_id=self.run_id, packet=packet(), ledger=self.ledger)
+        original_finish = self.ledger.finish
+        self.ledger.finish = lambda *args: (_ for _ in ()).throw(RuntimeError('crash'))
+        with self.assertRaises(RuntimeError):
+            validation_step(self.bridge, self.ledger, validation_task_id=validator_id,
+                            research_task_id=research_id, run_id=self.run_id)
+        self.assertEqual(self.api.tasks[validator_id]['status'], 'review')
+        restarted = RunLedger(self.ledger.path)
+        count = len(self.api.tasks)
+        result = recover_submitted_validation(self.bridge, restarted, run_id=self.run_id)
+        self.assertEqual(result['validation_report']['verdict'], 'RESEARCH_MORE')
+        self.assertEqual(restarted.status(self.run_id), 'COMPLETE')
+        self.assertEqual(len(self.api.tasks), count)
+        with self.assertRaises(HandoffError):
+            recover_submitted_validation(self.bridge, restarted, run_id=self.run_id)
+
+    def test_recovery_refuses_tampered_validator_report(self):
+        research_id = self.start()
+        validator_id = research_step(self.bridge, research_task_id=research_id,
+                                     run_id=self.run_id, packet=packet(), ledger=self.ledger)
+        self.api.tasks[validator_id]['status'] = 'review'
+        self.api.tasks[validator_id]['resolution'] = json.dumps({'verdict': 'PASS'})
+        with self.assertRaises(HandoffError):
+            recover_submitted_validation(self.bridge, self.ledger, run_id=self.run_id)
+        self.assertEqual(self.ledger.status(self.run_id), 'RESERVED')
 
 
 if __name__ == "__main__":
