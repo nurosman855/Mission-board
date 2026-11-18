@@ -79,6 +79,16 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid max_capacity. Expected integer 1..20.' }, { status: 400 })
     }
 
+    // An explicit claim must never consume a different task in the role queue.
+    const taskIdRaw = searchParams.get('task_id')
+    if (taskIdRaw !== null && !/^[1-9]\d*$/.test(taskIdRaw)) {
+      return NextResponse.json({ error: 'Invalid task_id. Expected a positive integer.' }, { status: 400 })
+    }
+    const taskId = taskIdRaw === null ? null : Number(taskIdRaw)
+    if (taskId !== null && (!Number.isSafeInteger(taskId) || taskId <= 0)) {
+      return NextResponse.json({ error: 'Invalid task_id. Expected a positive integer.' }, { status: 400 })
+    }
+
     const now = Math.floor(Date.now() / 1000)
 
     const currentTask = db.prepare(`
@@ -90,6 +100,9 @@ export async function GET(request: NextRequest) {
     `).get(workspaceId, agent) as any | undefined
 
     if (currentTask) {
+      if (taskId !== null && currentTask.id !== taskId) {
+        return NextResponse.json({ task: null, reason: 'at_capacity' as QueueReason, agent, timestamp: now })
+      }
       return NextResponse.json({
         task: mapTaskRow(currentTask),
         reason: 'continue_current' as QueueReason,
@@ -111,6 +124,19 @@ export async function GET(request: NextRequest) {
         agent,
         timestamp: now,
       })
+    }
+
+    if (taskId !== null) {
+      // Atomic conditional UPDATE: no polling side effect on unrelated tasks.
+      const claimed = db.prepare(`
+        UPDATE tasks SET status = 'in_progress', updated_at = ?
+        WHERE id = ? AND workspace_id = ? AND assigned_to = ? AND status = 'assigned'
+        RETURNING *
+      `).get(now, taskId, workspaceId, agent) as any | undefined
+      if (!claimed) {
+        return NextResponse.json({ task: null, reason: 'no_tasks_available' as QueueReason, agent, timestamp: now }, { status: 409 })
+      }
+      return NextResponse.json({ task: mapTaskRow(claimed), reason: 'assigned' as QueueReason, agent, timestamp: now })
     }
 
     // Atomic claim: single UPDATE with subquery to eliminate SELECT-UPDATE race condition.
