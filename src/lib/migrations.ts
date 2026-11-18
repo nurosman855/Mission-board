@@ -1550,6 +1550,23 @@ const migrations: Migration[] = [
         db.exec(`ALTER TABLE agents ADD COLUMN claude_base_session_created_at TEXT DEFAULT NULL`)
       }
     }
+  },
+  {
+    id: '056_task_create_idempotency',
+    up: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS task_create_idempotency (
+          workspace_id INTEGER NOT NULL,
+          actor_key TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          payload_hash TEXT NOT NULL,
+          task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+          PRIMARY KEY (workspace_id, actor_key, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_create_idempotency_task ON task_create_idempotency(task_id);
+      `)
+    }
   }
 ]
 
