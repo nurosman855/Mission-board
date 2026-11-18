@@ -9,7 +9,7 @@ vi.mock('@/lib/auth', () => ({ requireRole: requireRoleMock }))
 vi.mock('@/lib/rate-limit', () => ({ agentTaskLimiter: agentTaskLimiterMock }))
 vi.mock('@/lib/logger', () => ({ logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 vi.mock('@/lib/db', () => ({
-  getDatabase: vi.fn(() => ({ prepare: prepareMock })),
+  getDatabase: vi.fn(() => ({ prepare: prepareMock, transaction: (callback: () => unknown) => callback })),
 }))
 
 describe('task queue route security', () => {
