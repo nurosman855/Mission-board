@@ -8,7 +8,7 @@ from mission_control_bridge import HandoffError, MissionControlBridge
 from runtime_controls import RunLedger
 from test_handoff import packet
 from test_native_workers import NativeTaskFixture
-from worker_process import ScopedWorkerBridge, execute
+from worker_process import ScopedWorkerBridge, execute, resolve_packet_path
 
 
 class WorkerProcessTests(unittest.TestCase):
@@ -46,6 +46,13 @@ class WorkerProcessTests(unittest.TestCase):
         with self.assertRaises(HandoffError):
             execute('research', MissionControlBridge(self.transport), RunLedger(self.path),
                     run_id=self.run_id, packet=packet())
+
+    def test_service_fixture_path_is_researcher_only(self):
+        env = {'MC_RESEARCH_PACKET_PATH': '/var/lib/clearpage/fixture.json'}
+        self.assertEqual(resolve_packet_path('research', None, env), Path(env['MC_RESEARCH_PACKET_PATH']))
+        self.assertEqual(resolve_packet_path('research', Path('/explicit.json'), env), Path('/explicit.json'))
+        self.assertIsNone(resolve_packet_path('validation', None, env))
+        self.assertIsNone(resolve_packet_path('schedule', None, env))
 
 
 if __name__ == '__main__':
