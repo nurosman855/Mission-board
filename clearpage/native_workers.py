@@ -8,10 +8,54 @@ Every role must run under separately scoped credentials in production.
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
+from typing import Callable
 
 from handoff import simulate_handoff, validate_research_packet
 from mission_control_bridge import HandoffError, MissionControlBridge
 from runtime_controls import RunLedger
+
+
+@contextmanager
+def task_heartbeat(bridge: MissionControlBridge, task_id: int, token: str | None,
+                   *, interval_seconds: float = 30, local_heartbeat: Callable[[], None] | None = None):
+    """Keep a server fence alive during work; fail closed before submission.
+
+    A missing token is permitted only for injected offline fake transports.
+    Real scoped workers validate the token in their CLI before invoking stages.
+    """
+    if not token:
+        yield lambda: None
+        return
+    if interval_seconds <= 0 or interval_seconds >= 120:
+        raise HandoffError('Invalid heartbeat interval')
+    stopped = threading.Event()
+    errors: list[str] = []
+
+    def beat():
+        while not stopped.wait(interval_seconds):
+            try:
+                bridge.renew_task_lease(task_id, token)
+                if local_heartbeat:
+                    local_heartbeat()
+            except Exception:
+                errors.append('Server lease renewal failed')
+                stopped.set()
+
+    worker = threading.Thread(target=beat, name='clearpage-task-heartbeat', daemon=True)
+    worker.start()
+    try:
+        def assert_current():
+            if errors:
+                raise HandoffError(errors[0])
+            bridge.renew_task_lease(task_id, token)
+            if local_heartbeat:
+                local_heartbeat()
+        yield assert_current
+    finally:
+        stopped.set()
+        worker.join(timeout=5)
 
 
 def _task(bridge: MissionControlBridge, task_id: int, *, role: str, run_id: str, stage: str) -> dict:
@@ -45,7 +89,8 @@ def schedule(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str, qu
 
 
 def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id: str, packet: dict,
-                  ledger: RunLedger | None = None) -> int:
+                  ledger: RunLedger | None = None,
+                  local_heartbeat: Callable[[], None] | None = None) -> int:
     """Researcher worker: claim its own task, submit packet, schedule Validator."""
     issues = validate_research_packet(packet)
     if issues or packet.get("research_id") != run_id:
@@ -54,7 +99,9 @@ def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id
     if task.get("status") != "assigned":
         raise HandoffError("Research task not available for first claim")
     lease_token = bridge._claim(bridge.researcher, research_task_id)
-    bridge._submit_for_review(research_task_id, {"packet": packet, "simulation_only": True}, lease_token)
+    with task_heartbeat(bridge, research_task_id, lease_token, local_heartbeat=local_heartbeat) as assert_current:
+        assert_current()
+        bridge._submit_for_review(research_task_id, {"packet": packet, "simulation_only": True}, lease_token)
     validator_id = bridge._create("[SIM] Validate Research Packet", bridge.validator,
                           f"Inspect immutable Research Packet from task {research_task_id}.",
                           {"clearpage_run_id": run_id, "stage": "validation", "simulation_only": True,
@@ -65,7 +112,8 @@ def research_step(bridge: MissionControlBridge, *, research_task_id: int, run_id
 
 
 def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
-                    validation_task_id: int, research_task_id: int, run_id: str) -> dict:
+                    validation_task_id: int, research_task_id: int, run_id: str,
+                    local_heartbeat: Callable[[], None] | None = None) -> dict:
     """Validator worker: independently retrieve Researcher's submitted packet."""
     if ledger.status(run_id) != "RESERVED":
         raise HandoffError("Run not reserved or already finalized")
@@ -91,11 +139,13 @@ def validation_step(bridge: MissionControlBridge, ledger: RunLedger, *,
             validate_research_packet(packet) or packet.get("research_id") != run_id):
         raise HandoffError("Invalid or unauthorized Researcher resolution")
     lease_token = bridge._claim(bridge.validator, validation_task_id)
-    verdict = simulate_handoff(packet)
-    report = {"verdict": verdict.verdict, "next_step": verdict.next_step,
-              "issues": list(verdict.issues), "simulation_only": True,
-              "product_creation_allowed": False, "ai_calls": 0}
-    bridge._submit_for_review(validation_task_id, report, lease_token)
+    with task_heartbeat(bridge, validation_task_id, lease_token, local_heartbeat=local_heartbeat) as assert_current:
+        verdict = simulate_handoff(packet)
+        report = {"verdict": verdict.verdict, "next_step": verdict.next_step,
+                  "issues": list(verdict.issues), "simulation_only": True,
+                  "product_creation_allowed": False, "ai_calls": 0}
+        assert_current()
+        bridge._submit_for_review(validation_task_id, report, lease_token)
     result = {"research_task_id": research_task_id, "validation_task_id": validation_task_id,
               "validation_report": report, "mission_control_status": "review"}
     ledger.finish(run_id, result)
@@ -175,7 +225,8 @@ def research_with_lease(bridge: MissionControlBridge, ledger: RunLedger, *, run_
     """Supervised lease wrapper. Failure retains lease for reconciliation."""
     token = ledger.acquire_lease(run_id, 'research', owner)
     result = research_step(bridge, research_task_id=research_task_id, run_id=run_id,
-                           packet=packet, ledger=ledger)
+                           packet=packet, ledger=ledger,
+                           local_heartbeat=lambda: ledger.heartbeat_lease(run_id, 'research', owner, token))
     ledger.release_lease(run_id, 'research', owner, token)
     return result
 
@@ -185,6 +236,7 @@ def validation_with_lease(bridge: MissionControlBridge, ledger: RunLedger, *, ru
     """Supervised lease wrapper; no unsafe retry on failure."""
     token = ledger.acquire_lease(run_id, 'validation', owner)
     result = validation_step(bridge, ledger, run_id=run_id,
-                             research_task_id=research_task_id, validation_task_id=validation_task_id)
+                             research_task_id=research_task_id, validation_task_id=validation_task_id,
+                             local_heartbeat=lambda: ledger.heartbeat_lease(run_id, 'validation', owner, token))
     ledger.release_lease(run_id, 'validation', owner, token)
     return result
