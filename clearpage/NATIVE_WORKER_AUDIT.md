@@ -49,3 +49,11 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - **Verified against a live isolated Mission Control API:** Five concurrent identical POST requests returned `[201, 200, 200, 200, 200]`, all mapped to exactly one task, and same-key/different-payload returned HTTP 409. The same isolated run verified the Researcher → Validator native task handoff, `RESEARCH_MORE`, both tasks in `review`, and zero AI calls. The test used local throwaway credentials and a temporary SQLite database.
 - The Playwright configuration's full build/startup still exceeded its 120-second timeout. An independent local webpack development-server smoke test succeeded; CI and deployment-specific build verification remain separate checks. Keep the PR draft until release gates and permission controls are reviewed.
 - **Still open:** No automatic reconciliation supervisor; actor-scoped API permissions require independent enforcement tests; concurrent exact-task claim capacity has not been load-tested.
+
+### Agent permission and safe-finalization checkpoint
+
+- Non-admin agent-scoped task creation is now constrained to self-assignment, except for a narrow `clearpage-researcher` → `clearpage-validator` simulation handoff linked to a reviewed source in the same workspace and run.
+- The Validator cannot self-schedule a task (prevents forging a source link). It can read a reviewed Researcher source only when a matching linked Validator task exists; the existing task-update endpoint remains limited to its own assignment.
+- New unit tests cover unauthorized cross-agent creation and reviewed-source linkage. A dedicated end-to-end permission matrix using separate issued agent keys is **not yet completed**. Until then, do not declare runtime credential isolation production-ready.
+- `recover_submitted_validation` can safely finalize the ledger when both tasks are already in review and a deterministic recomputation matches the Validator's stored report. It cannot recover ambiguous partial remote transitions or perform unattended retries.
+- Crash-injection tests cover failure after remote Validator submission and before local completion, and rejection of tampered Validator output. **65 Python tests pass; targeted access-control tests and TypeScript checking pass.**
