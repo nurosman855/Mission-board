@@ -1567,6 +1567,18 @@ const migrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_task_create_idempotency_task ON task_create_idempotency(task_id);
       `)
     }
+  },
+  {
+    id: '057_clearpage_submission_fences',
+    up: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS clearpage_task_fences (
+        task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        workspace_id INTEGER NOT NULL,
+        agent_name TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      )`)
+    }
   }
 ]
 
