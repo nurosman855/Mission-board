@@ -83,6 +83,7 @@ export const createTaskSchema = z.object({
 
 // Every field optional, NO defaults — see comment above on `taskFields`.
 export const updateTaskSchema = z.object({
+  lease_token: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   title: taskFields.title.optional(),
   description: taskFields.description.optional(),
   status: taskFields.status.optional(),
