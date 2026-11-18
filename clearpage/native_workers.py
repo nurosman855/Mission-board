@@ -190,6 +190,13 @@ def recover_submitted_validation(bridge: MissionControlBridge, ledger: RunLedger
     Never claims tasks, retries work, or trusts a report without recomputing it
     from the Researcher's stored source packet.
     """
+    result = verify_submitted_validation(bridge, ledger, run_id=run_id)
+    ledger.finish(run_id, result)
+    return result
+
+
+def verify_submitted_validation(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str) -> dict:
+    """Read-only proof that a submitted result is safe to finalize locally."""
     if ledger.status(run_id) != "RESERVED":
         raise HandoffError("Recovery requires an unfinished reserved run")
     research_id, validator_id = ledger.task_ids(run_id)
@@ -216,7 +223,6 @@ def recover_submitted_validation(bridge: MissionControlBridge, ledger: RunLedger
         raise HandoffError("Validator result does not match deterministic source verification")
     result = {"research_task_id": research_id, "validation_task_id": validator_id,
               "validation_report": expected, "mission_control_status": "review"}
-    ledger.finish(run_id, result)
     return result
 
 
