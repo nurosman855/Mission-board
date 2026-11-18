@@ -40,23 +40,25 @@ class FakeAgentAPI:
 
 class InstructionTests(unittest.TestCase):
     def test_loads_each_soul_contract_and_skill(self):
-        for role in ("researcher", "validator"):
+        for role in ("researcher", "validator", "strategist"):
             text = agent_instructions(ROOT, role)
             self.assertIn("SOUL.md", text)
             self.assertIn("OUTPUT_CONTRACT.md", text)
             self.assertIn("SKILL.md", text)
-            self.assertIn("approval", text.lower())
+            self.assertIn("approv", text.lower())
 
     def test_rejects_unknown_role(self):
         with self.assertRaises(HandoffError):
-            agent_instructions(ROOT, "strategist")
+            agent_instructions(ROOT, "publisher")
 
-    def test_registers_and_verifies_both_native_souls(self):
+    def test_registers_and_verifies_three_native_souls(self):
         api = FakeAgentAPI()
         result = register_native_agents(api, ROOT)
-        self.assertEqual(set(result), {"researcher", "validator"})
+        self.assertEqual(set(result), {"researcher", "validator", "strategist"})
         self.assertEqual(api.agents["clearpage-validator"]["role"], "reviewer")
         self.assertIn("audit-market-evidence", api.souls[result["validator"]])
+        self.assertEqual(api.agents["clearpage-strategist"]["role"], "general")
+        self.assertIn("convert-evidence-to-product-brief", api.souls[result["strategist"]])
 
     def test_rejects_soul_readback_mismatch(self):
         with self.assertRaises(HandoffError):
