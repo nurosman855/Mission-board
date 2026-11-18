@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from mission_control_bridge import HandoffError, MissionControlBridge
 from native_workers import research_step, schedule
-from recovery_supervisor import finalize_verified, plan
+from recovery_supervisor import finalize_verified, plan, reconciliation_case
 from runtime_controls import RunLedger
 from test_handoff import packet
 from test_native_workers import NativeTaskFixture
@@ -98,6 +98,26 @@ class RecoverySupervisorTests(unittest.TestCase):
                          'MANUAL_RECONCILIATION_REQUIRED')
         with self.assertRaises(HandoffError):
             finalize_verified(self.bridge, self.ledger, run_id=self.run_id, operator_approved=True)
+
+    def test_reconciliation_case_is_stable_read_only_and_minimal(self):
+        research_id = self.start()
+        self.api.tasks[research_id]['status'] = 'in_progress'
+        before = len(self.api.calls)
+        first = reconciliation_case(self.bridge, self.ledger, run_id=self.run_id)
+        second = reconciliation_case(self.bridge, self.ledger, run_id=self.run_id)
+        self.assertEqual(first, second)
+        self.assertEqual(first['decision'], 'MANUAL_RECONCILIATION_REQUIRED')
+        self.assertEqual(first['tasks'][0]['status'], 'in_progress')
+        self.assertEqual(first['tasks'][0]['task_id'], research_id)
+        self.assertEqual(len(first['case_sha256']), 64)
+        self.assertNotIn('resolution', json.dumps(first))
+        self.assertTrue(all(method == 'GET' for method, _, _ in self.api.calls[before:]))
+
+    def test_reconciliation_case_refuses_wrong_remote_identity(self):
+        research_id = self.start()
+        self.api.tasks[research_id]['metadata']['clearpage_run_id'] = 'other-run'
+        with self.assertRaises(HandoffError):
+            reconciliation_case(self.bridge, self.ledger, run_id=self.run_id)
 
 
 if __name__ == '__main__':
