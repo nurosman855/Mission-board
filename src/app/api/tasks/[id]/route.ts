@@ -82,7 +82,24 @@ export async function GET(
     }
 
     const taskDeny = requireAgentTaskAccess(auth.user, (task as Task).assigned_to ?? null);
-    if (taskDeny) return taskDeny;
+    if (taskDeny) {
+      // Narrow, read-only access to the immutable source packet for a linked
+      // Validator task. PUT remains subject to normal assignment controls.
+      const meta = (() => { try { return JSON.parse(task.metadata || '{}') } catch { return {} } })()
+      const linked = auth.user.role !== 'admin' && auth.user.agent_name === 'clearpage-validator' &&
+        task.assigned_to === 'clearpage-researcher' && task.status === 'review' &&
+        meta.stage === 'research' && meta.simulation_only === true &&
+        typeof meta.clearpage_run_id === 'string' &&
+        db.prepare(`SELECT id FROM tasks WHERE workspace_id = ?
+          AND assigned_to = 'clearpage-validator'
+          AND json_extract(metadata, '$.research_task_id') = ?
+          AND json_extract(metadata, '$.clearpage_run_id') = ?
+          AND json_extract(metadata, '$.stage') = 'validation'
+          AND json_extract(metadata, '$.simulation_only') = 1 LIMIT 1`).get(
+          workspaceId, taskId, meta.clearpage_run_id,
+        )
+      if (!linked) return taskDeny;
+    }
 
     // Parse JSON fields
     const taskWithParsedData = mapTaskRow(task);
