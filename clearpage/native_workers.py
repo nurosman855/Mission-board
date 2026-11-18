@@ -123,6 +123,13 @@ def inspect_interrupted_run(bridge: MissionControlBridge, ledger: RunLedger, *, 
         action = "VALIDATION_READY" if validation["status"] == "assigned" else "MANUAL_RECONCILIATION"
     else:
         action = "MANUAL_RECONCILIATION"
+    if action in {"RESEARCH_READY", "VALIDATION_READY"}:
+        stage = "research" if action == "RESEARCH_READY" else "validation"
+        lease_state = ledger.lease_state(run_id, stage)
+        if lease_state == "ACTIVE":
+            action = "WAIT_ACTIVE_WORKER"
+        elif lease_state == "EXPIRED_NEEDS_REVIEW":
+            action = "MANUAL_RECONCILIATION"
     return {"run_id": run_id, "state": state, "research_task_id": research_id,
             "validation_task_id": validator_id, "action": action}
 
@@ -160,4 +167,24 @@ def recover_submitted_validation(bridge: MissionControlBridge, ledger: RunLedger
     result = {"research_task_id": research_id, "validation_task_id": validator_id,
               "validation_report": expected, "mission_control_status": "review"}
     ledger.finish(run_id, result)
+    return result
+
+
+def research_with_lease(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str,
+                        research_task_id: int, packet: dict, owner: str) -> int:
+    """Supervised lease wrapper. Failure retains lease for reconciliation."""
+    token = ledger.acquire_lease(run_id, 'research', owner)
+    result = research_step(bridge, research_task_id=research_task_id, run_id=run_id,
+                           packet=packet, ledger=ledger)
+    ledger.release_lease(run_id, 'research', owner, token)
+    return result
+
+
+def validation_with_lease(bridge: MissionControlBridge, ledger: RunLedger, *, run_id: str,
+                          research_task_id: int, validation_task_id: int, owner: str) -> dict:
+    """Supervised lease wrapper; no unsafe retry on failure."""
+    token = ledger.acquire_lease(run_id, 'validation', owner)
+    result = validation_step(bridge, ledger, run_id=run_id,
+                             research_task_id=research_task_id, validation_task_id=validation_task_id)
+    ledger.release_lease(run_id, 'validation', owner, token)
     return result
