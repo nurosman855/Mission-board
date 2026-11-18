@@ -40,7 +40,7 @@ class FakeAgentAPI:
 
 class InstructionTests(unittest.TestCase):
     def test_loads_each_soul_contract_and_skill(self):
-        for role in ("researcher", "validator", "strategist"):
+        for role in ("researcher", "validator", "strategist", "pdf_creator"):
             text = agent_instructions(ROOT, role)
             self.assertIn("SOUL.md", text)
             self.assertIn("OUTPUT_CONTRACT.md", text)
@@ -51,14 +51,16 @@ class InstructionTests(unittest.TestCase):
         with self.assertRaises(HandoffError):
             agent_instructions(ROOT, "publisher")
 
-    def test_registers_and_verifies_three_native_souls(self):
+    def test_registers_and_verifies_four_native_souls(self):
         api = FakeAgentAPI()
         result = register_native_agents(api, ROOT)
-        self.assertEqual(set(result), {"researcher", "validator", "strategist"})
+        self.assertEqual(set(result), {"researcher", "validator", "strategist", "pdf_creator"})
         self.assertEqual(api.agents["clearpage-validator"]["role"], "reviewer")
         self.assertIn("audit-market-evidence", api.souls[result["validator"]])
         self.assertEqual(api.agents["clearpage-strategist"]["role"], "general")
         self.assertIn("convert-evidence-to-product-brief", api.souls[result["strategist"]])
+        self.assertEqual(api.agents["clearpage-pdf-creator"]["role"], "general")
+        self.assertIn("build-verified-printables", api.souls[result["pdf_creator"]])
 
     def test_rejects_soul_readback_mismatch(self):
         with self.assertRaises(HandoffError):
