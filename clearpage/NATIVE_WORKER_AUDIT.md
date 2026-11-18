@@ -94,3 +94,11 @@ This is a **zero-cost fixture simulation** of separate Mission Control task owne
 - The integration deliberately created an expired `in_progress` task. The native queue correctly refused to claim another task for that role until an administrator reconciled the stale task. Reconciliation was performed **only in the isolated test database**. Production requires a reviewed operator procedure for this state.
 
 **Outstanding:** Real marketplace research, evidence-provider integrations, production credentials, durable always-on worker deployment, recovery from partial remote/local writes, load testing, and an automated browser E2E pass are not verified. Keep this work in draft review and keep paid APIs disabled until the separate security and recovery gates pass.
+
+### Conservative recovery supervisor checkpoint (2026-11-18)
+
+- Added `clearpage/recovery_supervisor.py` with a **read-only** one-run inspection and bounded `--watch` polling. Its HTTP transport rejects non-GET operations. It does not reclaim expired server fences, reset native task status, issue new work, or automatically retry a previously claimed task.
+- Decisions are explicit: `OPERATOR_MAY_START_RESEARCH_WORKER`, `OPERATOR_MAY_START_VALIDATOR_WORKER`, `WAIT_NO_RETRY`, `MANUAL_RECONCILIATION_REQUIRED`, `VERIFIED_FINALIZATION_AVAILABLE`, and `DONE_NO_REPLAY`.
+- The only mutation it can authorize is **local SQLite finalization** of an already submitted Validator report, and only with explicit `--finalize-verified`. Before that operation, the report is independently rederived from the Researcher's stored source packet and exact task/run linkage. No remote task writes or model calls occur.
+- Seven additional Python tests cover missing runs, both safe ready stages, claimed tasks, active and expired leases, crash-before-ledger-finalize recovery with explicit approval, and tampered results. **79 Python tests pass**.
+- This is deliberately **not** an unattended recovery supervisor capable of safely unblocking a stale `in_progress` server task. That needs an administrator-approved reconciliation protocol, stronger cross-store transactional coordination, and real deployment testing. A manually authorized worker restart is still required for a safe unclaimed stage.
